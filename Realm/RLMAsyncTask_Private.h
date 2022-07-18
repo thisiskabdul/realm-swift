@@ -38,4 +38,25 @@ __attribute__((objc_direct));
     __attribute__((swift_attr("@_unsafeInheritExecutor")));
 @end
 
+// A cancellable task for beginning an async write
+RLM_SWIFT_SENDABLE
+@interface RLMAsyncWriteTask : NSObject
+// Must only be called from within the Actor
+- (instancetype)initWithRealm:(RLMRealm *)realm;
+- (void)setTransactionId:(RLMAsyncTransactionId)transactionID;
+- (void)complete:(bool)cancel;
+
+// Can be called from any thread
+- (void)wait:(void (^)(void))completion;
+@end
+
+typedef void (^RLMAsyncRefreshCompletion)(bool);
+// A cancellable task for refreshing a Realm
+RLM_SWIFT_SENDABLE
+@interface RLMAsyncRefreshTask : NSObject
+- (void)complete:(bool)didRefresh;
+- (void)wait:(RLMAsyncRefreshCompletion)completion;
++ (RLMAsyncRefreshTask *)completedRefresh;
+@end
+
 RLM_HEADER_AUDIT_END(nullability)

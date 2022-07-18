@@ -651,6 +651,92 @@ class RealmCollectionTests<Collection: RealmCollection, AggregateCollection: Rea
         token2.invalidate()
     }
 
+    private actor TestActor {
+        private var gotInitial = false
+        private var gotChange = false
+        var expectation: XCTestExpectation!
+
+        func expect(_ description: String) {
+            expectation = XCTestExpectation(description: description)
+        }
+
+        func check(_ changes: RealmCollectionChange<Collection>) {
+            switch changes {
+            case .initial(let collection):
+                XCTAssertEqual(collection.count, 2)
+                XCTAssertFalse(gotInitial)
+                gotInitial = true
+                break
+
+            case let .update(collection, deletions, _, _):
+                XCTAssertEqual(collection.count, 0)
+                XCTAssertEqual(deletions, [0, 1])
+                XCTAssertFalse(gotChange)
+                gotChange = true
+                break
+
+            case .error(let error):
+                XCTFail("Unexpected error: \(error)")
+                break
+            }
+            expectation.fulfill()
+        }
+
+        func observe(_ tsr: ThreadSafeReference<Collection>) async throws -> NotificationToken {
+            let realm = try await Realm(configuration: Config.config, actor: self)
+            return try XCTUnwrap(realm.resolve(tsr)).observe(check)
+        }
+    }
+
+    @MainActor
+    func testObserveOnActor() async throws {
+        let actor = TestActor()
+        await actor.expect("initial notification")
+        let token = await collection.observe(on: actor) { actor, changes in
+            actor.check(changes)
+        }
+        await fulfillment(of: [actor.expectation])
+
+        await actor.expect("change notification")
+        let realm = self.realm()
+        try realm.write {
+            realm.delete(collection)
+        }
+        await fulfillment(of: [actor.expectation])
+        token.invalidate()
+    }
+
+    @MainActor
+    func testObserveInsideActor() async throws {
+        let actor = TestActor()
+        await actor.expect("initial notification")
+        let token = try await actor.observe(ThreadSafeReference(to: collection))
+        await fulfillment(of: [actor.expectation])
+
+        await actor.expect("change notification")
+        let realm = self.realm()
+        try realm.write {
+            realm.delete(collection)
+        }
+        await fulfillment(of: [actor.expectation])
+        token.invalidate()
+    }
+
+    @MainActor
+    func testCancelTaskForObservationInit() async throws {
+        let task = Locked<Task<Void, Never>?>(wrappedValue: nil)
+        task.wrappedValue = Task { @MainActor in
+            Task { @CustomGlobalActor in
+                task.wrappedValue!.cancel()
+            }
+            let token = await collection.observe(on: CustomGlobalActor.shared) { actor, changes in
+                XCTFail("should not have been registered")
+            }
+            XCTAssertFalse(token.invalidate())
+        }
+        await _ = task.wrappedValue!.value
+    }
+
     func testObserveKeyPath() {
         var ex = expectation(description: "initial notification")
         let token0 = collection.observe(keyPaths: ["stringCol"]) { (changes: RealmCollectionChange) in
@@ -1597,6 +1683,10 @@ class ListUnmanagedRealmCollectionTests: ListRealmCollectionTests {
         assertThrows(collection.observe { _ in })
     }
 
+    override func testCancelTaskForObservationInit() async throws {}
+    override func testObserveOnActor() async throws {}
+    override func testObserveInsideActor() async throws {}
+
     override func testObserveKeyPath() {
         assertThrows(collection.observe { _ in })
     }
@@ -1837,6 +1927,10 @@ class MutableSetUnmanagedRealmCollectionTests: MutableSetRealmCollectionTests {
     override func testObserve() {
         assertThrows(collection.observe { _ in })
     }
+
+    override func testCancelTaskForObservationInit() async throws {}
+    override func testObserveOnActor() async throws {}
+    override func testObserveInsideActor() async throws {}
 
     override func testObserveOnQueue() {
         assertThrows(collection.observe(on: DispatchQueue(label: "bg")) { _ in })

@@ -97,7 +97,7 @@ public struct Projected<T: ObjectBase, Value>: AnyProjected {
  
  ProjectionObservable is a Combine publisher
  */
-public protocol ProjectionObservable: AnyObject {
+public protocol ProjectionObservable: AnyObject, ThreadConfined {
     /// The Projection's underlying type - a child of Realm `Object` or `EmbeddedObject`.
     associatedtype Root: ObjectBase
     /// The object being projected
@@ -158,7 +158,7 @@ public protocol ProjectionObservable: AnyObject {
 /// let personObject = realm.create(Person.self)
 /// let singleProjection = PersonProjection(projecting: personObject)
 /// ```
-open class Projection<Root: ObjectBase & RealmCollectionValue>: RealmCollectionValue, ProjectionObservable {
+open class Projection<Root: ObjectBase & RealmCollectionValue & ThreadConfined>: RealmCollectionValue, ProjectionObservable {
     /// :nodoc:
     public typealias PersistedType = Root
 
@@ -281,12 +281,14 @@ extension ProjectionObservable {
      - parameter block: The block to call with information about changes to the object.
      - returns: A token which must be held for as long as you want updates to be delivered.
      */
-    public func observe(keyPaths: [String] = [],
+    public func observe(keyPaths: [String]? = nil,
                         on queue: DispatchQueue? = nil,
                         _ block: @escaping (ObjectChange<Self>) -> Void) -> NotificationToken {
         var kps: [String] = schema.map(\.originPropertyKeyPathString)
-        if !keyPaths.isEmpty {
-            kps = kps.filter { keyPaths.contains($0) }
+
+        // NEXT-MAJOR: stop conflating empty array and nil
+        if keyPaths?.isEmpty == true {
+            kps = kps.filter { keyPaths!.contains($0) }
         }
 
         // If we're observing on a different queue, we need a projection which
@@ -420,25 +422,50 @@ extension ProjectionObservable {
     public func observe(keyPaths: [PartialKeyPath<Self>],
                         on queue: DispatchQueue? = nil,
                         _ block: @escaping (ObjectChange<Self>) -> Void) -> NotificationToken {
-        var kps: [String]
-        if keyPaths.isEmpty {
-            kps = schema.map(\.originPropertyKeyPathString)
-        } else {
-            kps = []
-            let names = NSMutableArray()
-            let root = Root.keyPathRecorder(with: names)
-            let projection = Self(projecting: root)
-            for keyPath in keyPaths {
-                names.removeAllObjects()
-                _ = projection[keyPath: keyPath]
-                kps.append(names.componentsJoined(by: "."))
+        observe(keyPaths: map(keyPaths: keyPaths), on: queue, block)
+    }
+
+    @available(macOS 10.15, tvOS 13.0, iOS 13.0, watchOS 6.0, *)
+    @_unsafeInheritExecutor
+    public func observe<A: Actor>(
+        keyPaths: [String]? = nil, on actor: A,
+        _ block: @Sendable @escaping (isolated A, ObjectChange<Self>) -> Void
+    ) async -> NotificationToken {
+        await with(self, on: actor) { actor, obj in
+            obj.observe(keyPaths: keyPaths, on: nil) { (change: ObjectChange<Self>) in
+                assumeOnActorExecutor(actor) { actor in
+                    block(actor, change)
+                }
             }
-        }
-        return observe(keyPaths: kps, on: queue, block)
+        } ?? NotificationToken()
+    }
+
+    @available(macOS 10.15, tvOS 13.0, iOS 13.0, watchOS 6.0, *)
+    @_unsafeInheritExecutor
+    public func observe<A: Actor>(
+        keyPaths: [PartialKeyPath<Self>], on actor: A,
+        _ block: @Sendable @escaping (isolated A, ObjectChange<Self>) -> Void
+    ) async -> NotificationToken {
+        await observe(keyPaths: map(keyPaths: keyPaths), on: actor, block)
     }
 
     fileprivate var schema: [ProjectionProperty] {
         projectionSchemaCache.schema(for: self)
+    }
+
+    private func map(keyPaths: [PartialKeyPath<Self>]) -> [String]? {
+        if keyPaths.isEmpty {
+            return nil
+        }
+
+        let names = NSMutableArray()
+        let root = Root.keyPathRecorder(with: names)
+        let projection = Self(projecting: root)
+        return keyPaths.map {
+            names.removeAllObjects()
+            _ = projection[keyPath: $0]
+            return names.componentsJoined(by: ".")
+        }
     }
 }
 /**
@@ -633,6 +660,9 @@ extension NSLocking {
 internal struct Unchecked<Wrapped>: @unchecked Sendable {
     public var wrappedValue: Wrapped
     public init(wrappedValue: Wrapped) {
+        self.wrappedValue = wrappedValue
+    }
+    public init(_ wrappedValue: Wrapped) {
         self.wrappedValue = wrappedValue
     }
 }

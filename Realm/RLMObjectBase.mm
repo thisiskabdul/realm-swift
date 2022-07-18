@@ -652,8 +652,9 @@ struct ObjectChangeCallbackWrapper {
 @interface RLMObjectNotificationToken : RLMNotificationToken
 @end
 
+REALM_HIDDEN
 @implementation RLMObjectNotificationToken {
-    std::mutex _mutex;
+    RLMUnfairMutex _mutex;
     __unsafe_unretained RLMRealm *_realm;
     realm::Object _object;
     realm::NotificationToken _token;
@@ -664,17 +665,21 @@ struct ObjectChangeCallbackWrapper {
 }
 
 - (void)suppressNextNotification {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard lock(_mutex);
     if (_object.is_valid()) {
         _token.suppress_next();
     }
 }
 
-- (void)invalidate {
-    std::lock_guard<std::mutex> lock(_mutex);
-    _realm = nil;
-    _token = {};
-    _object = {};
+- (bool)invalidate {
+    std::lock_guard lock(_mutex);
+    if (_realm) {
+        _realm = nil;
+        _token = {};
+        _object = {};
+        return true;
+    }
+    return false;
 }
 
 - (void)addNotificationBlock:(RLMObjectNotificationCallback)block
@@ -682,7 +687,7 @@ struct ObjectChangeCallbackWrapper {
                       config:(RLMRealmConfiguration *)config
                     keyPaths:(std::optional<KeyPathArray>)keyPaths
                        queue:(dispatch_queue_t)queue {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard lock(_mutex);
     if (!_realm) {
         // Token was invalidated before we got this far
         return;

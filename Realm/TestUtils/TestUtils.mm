@@ -251,3 +251,7 @@ bool RLMThreadSanitizerEnabled() {
     return false;
 #endif
 }
+
+pid_t RLMFork() {
+    return fork();
+}

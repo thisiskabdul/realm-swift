@@ -88,14 +88,6 @@ NSUInteger RLMFastEnumerate(NSFastEnumerationState *state, NSUInteger len, id<RL
 - (instancetype)initWithChanges:(realm::CollectionChangeSet)indices;
 @end
 
-@interface RLMCancellationToken : RLMNotificationToken {
-@public
-    __unsafe_unretained RLMRealm *_realm;
-    realm::NotificationToken _token;
-    std::mutex _mutex;
-}
-@end
-
 realm::CollectionChangeCallback RLMWrapCollectionChangeCallback(void (^block)(id, id, NSError *),
                                                                 id collection, bool skipFirst);
 

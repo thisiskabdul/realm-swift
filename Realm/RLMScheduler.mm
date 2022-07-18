@@ -23,7 +23,7 @@
 @interface RLMMainRunLoopScheduler : RLMScheduler
 @end
 
-__attribute__((visibility("hidden")))
+REALM_HIDDEN
 @implementation RLMMainRunLoopScheduler
 - (std::shared_ptr<realm::util::Scheduler>)osScheduler {
     return realm::util::Scheduler::make_runloop(CFRunLoopGetMain());
@@ -41,7 +41,7 @@ __attribute__((visibility("hidden")))
 @interface RLMDispatchQueueScheduler : RLMScheduler
 @end
 
-__attribute__((visibility("hidden")))
+REALM_HIDDEN
 @implementation RLMDispatchQueueScheduler {
     dispatch_queue_t _queue;
 }
@@ -72,6 +72,77 @@ __attribute__((visibility("hidden")))
 }
 @end
 
+namespace {
+class ActorScheduler final : public realm::util::Scheduler {
+public:
+    ActorScheduler(void (^invoke)(dispatch_block_t), dispatch_block_t verify)
+    : _invoke(invoke) , _verify(verify) {}
+
+    void invoke(realm::util::UniqueFunction<void()>&& fn) override {
+        auto ptr = fn.release();
+        _invoke(^{
+            realm::util::UniqueFunction<void()> fn(ptr);
+            fn();
+        });
+    }
+
+    bool is_on_thread() const noexcept override {
+        _verify();
+        return true;
+    }
+
+    bool is_same_as(const Scheduler *) const noexcept override {
+        return false;
+    }
+
+    bool can_invoke() const noexcept override {
+        return true;
+    }
+
+private:
+    void (^_invoke)(dispatch_block_t);
+    dispatch_block_t _verify;
+};
+}
+
+@interface RLMActorScheduler : RLMScheduler
+@end
+
+REALM_HIDDEN
+@implementation RLMActorScheduler {
+    id _actor;
+    void (^_invoke)(dispatch_block_t);
+    void (^_verify)();
+}
+
+- (instancetype)initWithActor:(id)actor invoke:(void (^)(dispatch_block_t))invoke verify:(void (^)())verify {
+    if (self = [super init]) {
+        _actor = actor;
+        _invoke = invoke;
+        _verify = verify;
+    }
+    return self;
+}
+
+- (void)invoke:(dispatch_block_t)block {
+    _invoke(block);
+}
+
+- (std::shared_ptr<realm::util::Scheduler>)osScheduler {
+    // FIXME: special-case main actor?
+    return std::make_shared<ActorScheduler>(_invoke, _verify);
+}
+
+- (void *)cacheKey {
+    // FIXME: special-case main actor?
+    return (__bridge void *)_actor;
+}
+
+- (id)actor {
+    return _actor;
+}
+@end
+
 @implementation RLMScheduler
 + (RLMScheduler *)currentRunLoop {
     static RLMScheduler *currentRunLoopScheduler = [[RLMScheduler alloc] init];
@@ -90,6 +161,10 @@ __attribute__((visibility("hidden")))
     return RLMScheduler.currentRunLoop;
 }
 
++ (RLMScheduler *)actor:(id)actor invoke:(void (^)(dispatch_block_t))invoke verify:(void (^)())verify {
+    return [[RLMActorScheduler alloc] initWithActor:actor invoke:invoke verify:verify];
+}
+
 - (void)invoke:(dispatch_block_t)block {
     // Currently not used or needed for run loops
     REALM_UNREACHABLE();
@@ -105,5 +180,9 @@ __attribute__((visibility("hidden")))
         return RLMScheduler.mainRunLoop.cacheKey;
     }
     return pthread_self();
+}
+
+- (id)actor {
+    return nil;
 }
 @end

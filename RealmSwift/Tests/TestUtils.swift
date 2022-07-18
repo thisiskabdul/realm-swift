@@ -188,3 +188,71 @@ public extension XCTestCase {
         XCTAssertFalse(itemMap.values.contains(false))
     }
 }
+
+@_unsafeInheritExecutor
+public func assertThrowsErrorAsync<T, E: Equatable & Error>(
+    _ expression: @autoclosure () async throws -> T,
+    _ expectedError: E,
+    file: StaticString = #filePath, line: UInt = #line) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected expression to throw error \(expectedError)", file: file, line: line)
+    } catch let error as E {
+        XCTAssertEqual(error, expectedError, file: file, line: line)
+    } catch {
+        XCTFail("Expected expression to throw error \(expectedError) but got \(error)", file: file, line: line)
+    }
+}
+
+// Fork, call an expression which should hit a precondition failure in the child
+// process, and then verify that the expected failure message was printed. Note
+// that Swift and Foundation do not support fork(), so anything which does more
+// than a very limited amount of work before the precondition failure is very
+// likely to break.
+@_unsafeInheritExecutor
+public func assertPreconditionFailure(_ message: String, _ expression: () async throws -> Void,
+                                      file: StaticString = #filePath, line: UInt = #line) async throws {
+    let pipe = Pipe()
+
+    let pid = RLMFork()
+    if (pid == -1) {
+        return XCTFail("Failed to fork for test", file: file, line: line)
+    }
+
+    if (pid == 0) {
+        // In child process
+        // Point stdout and stderr at our pipe
+        let fd = pipe.fileHandleForWriting.fileDescriptor
+        while dup2(fd, STDOUT_FILENO) == -1 && errno == EINTR {}
+        while dup2(fd, STDERR_FILENO) == -1 && errno == EINTR {}
+        try await expression()
+        exit(0)
+    }
+
+    try pipe.fileHandleForWriting.close()
+    while true {
+        var status: Int32 = 0
+        let ret = waitpid(pid, &status, 0)
+        if ret == -1 && errno == EINTR {
+            continue
+        }
+        guard ret > 0 else {
+            return XCTFail("Failed to wait for child process to exit? errno: \(errno)", file: file, line: line)
+        }
+        guard status != 0 else {
+            return XCTFail("Expected child process to crash with message \"\(message)\", but it exited cleanly", file: file, line: line)
+        }
+        break
+    }
+
+    guard let data = try pipe.fileHandleForReading.readToEnd() else {
+        return XCTFail("Expected child process to crash with message \"\(message)\", but it exited without printing anything", file: file, line: line)
+    }
+    guard let str = String(data: data, encoding: .utf8) else {
+        return XCTFail("Expected child process to crash with message \"\(message)\", but it did not print valid utf-8", file: file, line: line)
+    }
+
+    if !str.contains("Precondition failed: \(message)") {
+        XCTFail("Expected \"\(str)\" to contain \"\(message)\")", file: file, line: line)
+    }
+}

@@ -2319,7 +2319,7 @@ func hasCombine() -> Bool {
     return false
 }
 
-@available(OSX 10.15, watchOS 6.0, iOS 13.0, iOSApplicationExtension 13.0, OSXApplicationExtension 10.15, tvOS 13.0, *)
+@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
 extension Publisher {
     func expectValue(_ testCase: XCTestCase, _ expectation: XCTestExpectation,
                      receiveValue: (@Sendable (Self.Output) -> Void)? = nil) -> AnyCancellable {
@@ -2381,7 +2381,7 @@ extension Publisher {
     }
 }
 
-@available(OSX 10.15, watchOS 6.0, iOS 13.0, iOSApplicationExtension 13.0, OSXApplicationExtension 10.15, tvOS 13.0, *)
+@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
 @objc(CombineObjectServerTests)
 class CombineObjectServerTests: SwiftSyncTestCase {
     override class var defaultTestSuite: XCTestSuite {

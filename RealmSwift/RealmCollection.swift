@@ -158,17 +158,18 @@ public protocol _RealmMapValue {
      */
     case error(Error)
 
-    static func fromObjc(value: CollectionType?, change: RLMCollectionChange?, error: Error?) -> RealmCollectionChange {
+    init(value: CollectionType?, change: RLMCollectionChange?, error: Error?) {
         if let error = error {
-            return .error(error)
+            self = .error(error)
         }
-        if let change = change {
-            return .update(value!,
+        else if let change = change {
+            self = .update(value!,
                 deletions: forceCast(change.deletions, to: [Int].self),
                 insertions: forceCast(change.insertions, to: [Int].self),
                 modifications: forceCast(change.modifications, to: [Int].self))
+        } else {
+            self = .initial(value!)
         }
-        return .initial(value!)
     }
 }
 
@@ -522,6 +523,12 @@ public protocol RealmCollection: RealmCollectionBase, Equatable where Iterator =
     func observe(keyPaths: [String]?,
                  on queue: DispatchQueue?,
                  _ block: @escaping (RealmCollectionChange<Self>) -> Void) -> NotificationToken
+
+    @available(macOS 10.15, tvOS 13.0, iOS 13.0, watchOS 6.0, *)
+    @_unsafeInheritExecutor
+    func observe<A: Actor>(keyPaths: [String]?,
+                           on actor: A,
+                           _ block: @Sendable @escaping (isolated A, RealmCollectionChange<Self>) -> Void) async -> NotificationToken
 
     // MARK: Frozen Objects
 
@@ -1025,6 +1032,14 @@ public extension RealmCollection {
                                 _ block: @escaping (RealmCollectionChange<Self>) -> Void) -> NotificationToken {
         return self.observe(keyPaths: keyPaths.map(_name(for:)), on: queue, block)
     }
+
+    @available(macOS 10.15, tvOS 13.0, iOS 13.0, watchOS 6.0, *)
+    @_unsafeInheritExecutor
+    func observe<A: Actor>(on actor: A,
+                           _ block: @Sendable @escaping (isolated A, RealmCollectionChange<Self>) -> Void) async -> NotificationToken {
+        await observe(keyPaths: nil, on: actor, block)
+    }
+
 
     /**
      Registers a block to be called each time the collection changes.

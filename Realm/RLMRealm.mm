@@ -100,12 +100,17 @@ BOOL RLMIsRealmCachedAtPath(NSString *path) {
     return RLMGetAnyCachedRealmForPath([path cStringUsingEncoding:NSUTF8StringEncoding]) != nil;
 }
 
+REALM_HIDDEN
 @implementation RLMRealmNotificationToken
-- (void)invalidate {
-    [_realm verifyThread];
-    [_realm.notificationHandlers removeObject:self];
-    _realm = nil;
-    _block = nil;
+- (bool)invalidate {
+    if (_realm) {
+        [_realm verifyThread];
+        [_realm.notificationHandlers removeObject:self];
+        _realm = nil;
+        _block = nil;
+        return true;
+    }
+    return false;
 }
 
 - (void)suppressNextNotification {
@@ -352,6 +357,7 @@ bool copySeedFile(RLMRealmConfiguration *configuration, NSError **error) {
 
     RLMRealm *realm = [[self alloc] initPrivate];
     realm->_dynamic = dynamic;
+    realm->_actor = scheduler.actor;
 
     // protects the realm cache and accessors cache
     static auto& initLock = *new RLMUnfairMutex;
@@ -483,7 +489,7 @@ bool copySeedFile(RLMRealmConfiguration *configuration, NSError **error) {
     if (_realm->is_frozen()) {
         @throw RLMException(@"Frozen Realms do not change and do not have change notifications.");
     }
-    if (!_realm->can_deliver_notifications()) {
+    if (_realm->config().automatic_change_notifications && !_realm->can_deliver_notifications()) {
         @throw RLMException(@"Can only add notification blocks from within runloops.");
     }
     if (isCollection && _realm->is_in_transaction()) {
@@ -640,6 +646,22 @@ bool copySeedFile(RLMRealmConfiguration *configuration, NSError **error) {
         RLMRealmTranslateException(nil);
         return 0;
     }
+}
+
+- (RLMAsyncWriteTask *)beginAsyncWrite {
+    try {
+        auto write = [[RLMAsyncWriteTask alloc] initWithRealm:self];
+        write.transactionId = _realm->async_begin_transaction(^{ [write complete:false]; }, true);
+        return write;
+    }
+    catch (std::exception &ex) {
+        @throw RLMException(ex);
+    }
+}
+
+- (void)commitAsyncWriteWithGrouping:(bool)allowGrouping
+                          completion:(void(^)(NSError *_Nullable))completion {
+    [self commitAsyncWriteTransaction:completion allowGrouping:allowGrouping];
 }
 
 - (RLMAsyncTransactionId)commitAsyncWriteTransaction:(void(^)(NSError *))completionBlock {

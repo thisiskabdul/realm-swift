@@ -1205,16 +1205,35 @@ extension Realm {
     public init(configuration: Realm.Configuration = .defaultConfiguration,
                 downloadBeforeOpen: OpenBehavior = .never) async throws {
         let scheduler = RLMScheduler.dispatchQueue(.main)
+        let rlmRealm = try await Realm.open(configuration: configuration, scheduler: scheduler,
+                                            actor: MainActor.shared, downloadBeforeOpen: downloadBeforeOpen)
+        self = Realm(rlmRealm.wrappedValue)
+    }
+
+    public init<A: Actor>(configuration: Realm.Configuration = .defaultConfiguration,
+                          actor: A,
+                          downloadBeforeOpen: OpenBehavior = .never) async throws {
+        let scheduler = RLMScheduler.actor(actor, invoke: actor.invoke, verify: await actor.verifier())
+        let rlmRealm = try await Realm.open(configuration: configuration, scheduler: scheduler,
+                                            actor: actor, downloadBeforeOpen: downloadBeforeOpen)
+        self = Realm(rlmRealm.wrappedValue)
+    }
+
+    static private func open<A: Actor>(configuration: Realm.Configuration = .defaultConfiguration,
+                                       scheduler: RLMScheduler,
+                                       actor: isolated A,
+                                       downloadBeforeOpen: OpenBehavior = .never) async throws -> Unchecked<RLMRealm> {
+        let scheduler = RLMScheduler.actor(actor, invoke: actor.invoke, verify: actor.verifier())
         let rlmConfiguration = configuration.rlmConfiguration
 
         // If we already have a cached Realm for this actor, just reuse it
         // If this Realm is open but with a different scheduler, open it synchronously.
-        // An async open would just dispatch to the background and then back to
-        // perform the final synchronous open.
+        // The overhead of dispatching to a different thread and back is more expensive
+        // than the fast path of obtaining a new instance for an already open Realm.
         var realm = RLMGetCachedRealm(rlmConfiguration, scheduler)
         if realm == nil, let cachedRealm = RLMGetAnyCachedRealm(rlmConfiguration) {
-            realm = try withExtendedLifetime(cachedRealm) {
-                try RLMRealm(configuration: rlmConfiguration, confinedTo: scheduler)
+            try withExtendedLifetime(cachedRealm) {
+                realm = try RLMRealm(configuration: rlmConfiguration, confinedTo: scheduler)
             }
         }
         if let realm = realm {
@@ -1222,30 +1241,98 @@ extension Realm {
             if downloadBeforeOpen == .always {
                 try await realm.waitForDownloadCompletion()
             }
-            self = Realm(realm)
-            return
+            return Unchecked(realm)
         }
 
         // We're doing the first open and hitting the expensive path, so do an async
         // open on a background thread
         let task = RLMAsyncOpenTask(configuration: rlmConfiguration, confinedTo: scheduler,
                                     download: shouldAsyncOpen(configuration, downloadBeforeOpen))
+        // progress?
         do {
-            try await withTaskCancellationHandler {
-                // Work around https://github.com/apple/swift/issues/61119 by smuggling
-                // the Realm out via a property on task rather than returning it
-                task.localRealm = try await task.waitForOpen()
+            return try await Unchecked(withTaskCancellationHandler {
+                try await task.waitForOpen()
             } onCancel: {
                 task.cancel()
-            }
-            self = Realm(task.localRealm!)
-            task.localRealm = nil
+            })
         } catch {
             // Check if the task was cancelled and if so replace the error
             // with reporting cancellation
             try Task.checkCancellation()
             throw error
         }
+    }
+
+    @discardableResult
+    @_unsafeInheritExecutor
+    public func asyncWrite<Result>(allowGrouping: Bool = false,
+                                   _ block: (() throws -> Result)) async throws -> Result {
+        try await withoutActuallyEscaping(block) { block in
+            try await asyncWrite(actor: rlmRealm.actor as! Actor,
+                                 allowGrouping: allowGrouping, Unchecked(block)).wrappedValue
+        }
+    }
+
+    private func asyncWrite<Result>(actor: isolated any Actor,
+                                      allowGrouping: Bool = false,
+                                      _ block: Unchecked<(() throws -> Result)>) async throws
+    -> Unchecked<Result> {
+        let write = rlmRealm.beginAsyncWrite()
+        await withTaskCancellationHandler {
+            await write.wait()
+        } onCancel: {
+            actor.invoke { write.complete(true) }
+        }
+
+        let ret: Result
+        do {
+            try Task.checkCancellation()
+            ret = try block.wrappedValue()
+        } catch {
+            if isInWriteTransaction { cancelWrite() }
+            throw error
+        }
+
+        if isInWriteTransaction {
+            try await rlmRealm.commitAsyncWrite(withGrouping: allowGrouping)
+        }
+        return Unchecked(ret)
+    }
+
+    @discardableResult
+    @_unsafeInheritExecutor
+    public func asyncRefresh() async -> Bool {
+        guard let task = RLMRealmRefreshAsync(rlmRealm) else {
+            return false
+        }
+        return await withTaskCancellationHandler {
+            await task.wait()
+        } onCancel: {
+            task.complete(false)
+        }
+    }
+}
+
+@available(macOS 10.15, tvOS 13.0, iOS 13.0, watchOS 6.0, *)
+internal extension Actor {
+    func verifier() -> (@Sendable () -> Void) {
+        let fn: () -> Void = { _ = self }
+        return unsafeBitCast(fn, to: (@Sendable () -> Void).self)
+    }
+
+    nonisolated func invoke(_ fn: @escaping () -> Void) {
+        let fn = unsafeBitCast(fn, to: (@Sendable () -> Void).self)
+        Task {
+            await doInvoke(fn)
+        }
+    }
+
+    func doInvoke(_ fn: @Sendable () -> Void) {
+        fn()
+    }
+
+    func invoke<T>(_ fn: @Sendable (isolated Self) throws -> T) rethrows -> T {
+        try fn(self)
     }
 }
 #endif // swift(>=5.5)

@@ -1487,9 +1487,387 @@ class RealmTests: TestCase {
         XCTAssertNil(realm.objects(SwiftStringObject.self).first { $0.stringCol == "string A" })
         XCTAssertNotNil(realm.objects(SwiftStringObject.self).first { $0.stringCol == "string B" })
     }
+
+    // MARK: - Async Refresh
+
+    func manuallyAdvancedRealm() throws -> (Realm, String) {
+        let config = RLMRealmConfiguration.default()
+        config.disableAutomaticChangeNotifications = true
+        config.cache = false
+        return (ObjectiveCSupport.convert(object: try RLMRealm(configuration: config)), config.pathOnDisk)
+    }
+
+    @MainActor
+    func testAsyncRefresh() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        realm.autorefresh = false
+
+        let results = realm.objects(SwiftStringObject.self)
+        XCTAssertEqual(results.count, 0)
+        var didRefresh = await realm.asyncRefresh()
+        XCTAssertFalse(didRefresh)
+
+        try await Task { @CustomGlobalActor in
+            let realm = try await Realm(actor: CustomGlobalActor.shared)
+            try! realm.write {
+                _ = realm.create(SwiftStringObject.self, value: ["string"])
+            }
+        }.value
+
+        XCTAssertEqual(results.count, 0)
+        didRefresh = await realm.asyncRefresh()
+        XCTAssertTrue(didRefresh)
+        XCTAssertEqual(results.count, 1)
+    }
+
+    @MainActor
+    func testAsyncRefreshWaitsForLatest() async throws {
+        let (realm, path) = try manuallyAdvancedRealm()
+        let results = realm.objects(SwiftStringObject.self)
+        // Observe so that it has to wait and can't just advance immediately
+        let token = results.observe { _ in }
+        XCTAssertEqual(results.count, 0)
+
+        let (realm2, _) = try manuallyAdvancedRealm()
+        try! realm2.write {
+            _ = realm2.create(SwiftStringObject.self, value: ["string"])
+        }
+        RLMRunAsyncNotifiers(path)
+        // Notifiers are now up to date for the above write, but the Realm hasn't
+        // been refreshed
+
+        try! realm2.write {
+            _ = realm2.create(SwiftStringObject.self, value: ["string"])
+        }
+        // Notifiers are now newer than the Realm, but still out of date
+
+        Task { @MainActor in
+            // This will run only when the parent task suspends as they're both
+            // on the main actor
+            RLMRunAsyncNotifiers(path)
+        }
+
+        XCTAssertEqual(results.count, 0)
+        // Here notify() will advance to the version with one object, but we
+        // need to wait for the version with two
+        let didRefresh = await realm.asyncRefresh()
+        XCTAssertTrue(didRefresh)
+        XCTAssertEqual(results.count, 2)
+        token.invalidate()
+    }
+
+    @MainActor
+    func testAsyncRefreshWaitsForLatestAutorefreshOff() async throws {
+        let (realm, path) = try manuallyAdvancedRealm()
+        realm.autorefresh = false
+        let results = realm.objects(SwiftStringObject.self)
+        // Observe so that it has to wait and can't just advance immediately
+        let token = results.observe { _ in }
+        XCTAssertEqual(results.count, 0)
+
+        let (realm2, _) = try manuallyAdvancedRealm()
+        try! realm2.write {
+            _ = realm2.create(SwiftStringObject.self, value: ["string"])
+        }
+        RLMRunAsyncNotifiers(path)
+        // Notifiers are now up to date for the above write, but the Realm hasn't
+        // been refreshed
+
+        try! realm2.write {
+            _ = realm2.create(SwiftStringObject.self, value: ["string"])
+        }
+        // Notifiers are now newer than the Realm, but still out of date
+
+        Task { @MainActor in
+            // This will run only when the parent task suspends as they're both
+            // on the main actor
+            RLMRunAsyncNotifiers(path)
+        }
+
+        XCTAssertEqual(results.count, 0)
+        // Here notify() will advance to the version with one object, but we
+        // need to wait for the version with two
+        let didRefresh = await realm.asyncRefresh()
+        XCTAssertTrue(didRefresh)
+        XCTAssertEqual(results.count, 2)
+        token.invalidate()
+    }
+
+    @MainActor
+    func testAsyncRefreshWithMultipleWaiters() async throws {
+        let (realm, path) = try manuallyAdvancedRealm()
+        let results = realm.objects(SwiftStringObject.self)
+        let token = results.observe { _ in }
+        XCTAssertEqual(results.count, 0)
+
+        // The order of execution here is weird. Each of the nested tasks can
+        // run only when the outer task suspends, so this runs when we hit
+        // the bottom asyncRefresh(), and then the task with RLMRunAsyncNotifiers
+        // runs when we hit the inner asyncRefresh
+        let task = Task { @MainActor in
+            Task { @MainActor in
+                RLMRunAsyncNotifiers(path)
+            }
+            XCTAssertEqual(results.count, 0)
+            await realm.asyncRefresh()
+            XCTAssertEqual(results.count, 1)
+        }
+
+        let (realm2, _) = try manuallyAdvancedRealm()
+        try! realm2.write {
+            _ = realm2.create(SwiftStringObject.self, value: ["string"])
+        }
+
+        XCTAssertEqual(results.count, 0)
+        await realm.asyncRefresh()
+        XCTAssertEqual(results.count, 1)
+        // Verify that both continuations were resumed
+        _ = await task.value
+        token.invalidate()
+    }
+
+    func testAsyncRefreshOnQueueConfinedRealm() async {
+        @Locked var realm: Realm!
+        dispatchSyncNewThread {
+            realm = try! Realm(queue: self.queue)
+        }
+        // unclear how to to write this
+//        assertThrows(realm.asyncRefresh(), reason: "asdf")
+    }
+
+    @MainActor
+    func testAsyncRefreshTaskCancellation() async throws {
+        let (realm, _) = try manuallyAdvancedRealm()
+        let results = realm.objects(SwiftStringObject.self)
+        let token = results.observe { _ in }
+
+        let (realm2, _) = try manuallyAdvancedRealm()
+        try! realm2.write {
+            _ = realm2.create(SwiftStringObject.self, value: ["string"])
+        }
+
+        let task = Task { @MainActor in
+            let didRefresh = await realm.asyncRefresh()
+            XCTAssertFalse(didRefresh)
+        }
+        task.cancel()
+        _ = await task.value
+        token.invalidate()
+    }
+
+    // MARK: - Async Writes
+
+    @MainActor
+    func testAsyncWriteBasics() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        let obj = try await realm.asyncWrite {
+            XCTAssertTrue(realm.isInWriteTransaction)
+            XCTAssertTrue(realm.isPerformingAsynchronousWriteOperations)
+            return realm.create(SwiftStringObject.self, value: ["foo"])
+        }
+        XCTAssertFalse(realm.isInWriteTransaction)
+        XCTAssertFalse(realm.isPerformingAsynchronousWriteOperations)
+        XCTAssertEqual(realm.objects(SwiftStringObject.self).count, 1)
+        XCTAssertEqual(obj.stringCol, "foo")
+    }
+
+    @MainActor
+    func testAsyncWriteCancel() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        try await realm.asyncWrite {
+            realm.create(SwiftStringObject.self, value: ["foo"])
+            realm.cancelWrite()
+            XCTAssertFalse(realm.isInWriteTransaction)
+        }
+        XCTAssertEqual(realm.objects(SwiftStringObject.self).count, 0)
+    }
+
+    @MainActor
+    func testAsyncWriteBeginNewWriteAfterCancel() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        try await realm.asyncWrite {
+            realm.create(SwiftStringObject.self, value: ["foo"])
+            realm.cancelWrite()
+            realm.beginWrite()
+            realm.create(SwiftStringObject.self, value: ["bar"])
+        }
+        let objects = realm.objects(SwiftStringObject.self)
+        XCTAssertEqual(objects.count, 1)
+        XCTAssertEqual(try XCTUnwrap(objects.first).stringCol, "bar")
+    }
+
+    @MainActor
+    func testAsyncWriteModifyExistingObject() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        let obj = try await realm.asyncWrite {
+            realm.create(SwiftStringObject.self, value: ["foo"])
+        }
+        try await realm.asyncWrite {
+            obj.stringCol = "bar"
+        }
+        XCTAssertEqual(obj.stringCol, "bar")
+    }
+
+    @MainActor
+    func testAsyncWriteCancelsOnThrow() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+
+        await assertThrowsErrorAsync(try await realm.asyncWrite {
+            realm.create(SwiftStringObject.self, value: ["foo"])
+            throw Realm.Error(.fail)
+        }, Realm.Error(.fail))
+
+        await assertThrowsErrorAsync(try await realm.asyncWrite {
+            realm.create(SwiftStringObject.self, value: ["foo"])
+            realm.cancelWrite()
+            throw Realm.Error(.fail)
+        }, Realm.Error(.fail))
+
+        XCTAssertEqual(realm.objects(SwiftStringObject.self).count, 0)
+    }
+
+    @CustomGlobalActor
+    func testAsyncWriteCustomGlobalActor() async throws {
+        let realm = try await Realm(actor: CustomGlobalActor.shared)
+        let obj = try await realm.asyncWrite {
+            realm.create(SwiftStringObject.self, value: ["foo"])
+        }
+        XCTAssertEqual(realm.objects(SwiftStringObject.self).count, 1)
+        XCTAssertEqual(obj.stringCol, "foo")
+        try await realm.asyncWrite {
+            obj.stringCol = "bar"
+        }
+        XCTAssertEqual(obj.stringCol, "bar")
+    }
+
+    func testAsyncWriteCustomActor() async throws {
+        actor TestActor {
+            var realm: Realm!
+            var obj: SwiftStringObject?
+            init() async throws {
+                realm = try await Realm(actor: self)
+            }
+
+            var count: Int {
+                realm.objects(SwiftStringObject.self).count
+            }
+
+            var value: String? {
+                obj?.stringCol
+            }
+
+            func create() async throws {
+                obj = try await realm.asyncWrite {
+                    realm.create(SwiftStringObject.self, value: ["foo"])
+                }
+            }
+
+            func modify() async throws {
+                try await realm.asyncWrite {
+                    obj?.stringCol = "bar"
+                }
+            }
+
+            func close() {
+                realm = nil
+                obj = nil
+            }
+        }
+        let actor = try await TestActor()
+        var count = await actor.count
+        XCTAssertEqual(count, 0)
+
+        try await actor.create()
+        count = await actor.count
+        var value = await actor.value
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(value, "foo")
+
+        try await actor.modify()
+        count = await actor.count
+        value = await actor.value
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(value, "bar")
+
+        await actor.close()
+    }
+
+    @MainActor
+    func testAsyncWriteTaskCancellation() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        realm.beginWrite()
+
+        let ex = expectation(description: "Background thread ready")
+        let task = Task { @CustomGlobalActor in
+            let realm = try await Realm(actor: CustomGlobalActor.shared)
+            ex.fulfill()
+            try await realm.asyncWrite {
+                XCTFail("Should not have been called")
+            }
+        }
+        await fulfillment(of: [ex], timeout: 2.0)
+        Task { @CustomGlobalActor in
+            // Cancel the task from within its actor so that we can be sure
+            // that it has suspended with the task cancellation handler set
+            task.cancel()
+        }
+        await assertThrowsErrorAsync(try await task.value, CancellationError())
+        realm.cancelWrite()
+    }
+
+    @MainActor
+    func testAsyncWriteTaskCancelledBeforeWriteCalled() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        realm.beginWrite()
+
+        let ex = expectation(description: "Background thread ready")
+        let task = Task { @CustomGlobalActor in
+            let realm = try await Realm(actor: CustomGlobalActor.shared)
+            ex.fulfill()
+            // Block until cancelWrite() is called, ensuring that the Task is
+            // cancelled before the call to asyncWrite
+            realm.beginWrite()
+            realm.cancelWrite()
+            try await realm.asyncWrite {
+                XCTFail("Should not have been called")
+            }
+        }
+        await fulfillment(of: [ex], timeout: 2.0)
+        task.cancel()
+        realm.cancelWrite()
+
+        await assertThrowsErrorAsync(try await task.value, CancellationError())
+    }
+
+    @MainActor
+    func testAsyncWriteTaskCancellationTiming() async throws {
+        let realm = try await Realm(actor: MainActor.shared)
+        realm.beginWrite()
+
+        // Try to hit the timing windows which can't be deterministically tested
+        // by just repeating it a bunch of times. This should trigger tsan errors
+        // if the locking is incorrect.
+        for _ in 0..<1000 {
+            let ex = expectation(description: "Background thread ready")
+            let task = Task { @CustomGlobalActor in
+                let realm = try await Realm(actor: CustomGlobalActor.shared)
+                ex.fulfill()
+                try await realm.asyncWrite {
+                    XCTFail("Should not have been called")
+                }
+            }
+            await fulfillment(of: [ex], timeout: 2.0)
+            task.cancel()
+            await assertThrowsErrorAsync(try await task.value, CancellationError())
+        }
+        realm.cancelWrite()
+    }
 }
 
-@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
+@globalActor actor CustomGlobalActor: GlobalActor {
+    static var shared = CustomGlobalActor()
+}
+
 extension CancellationError: Equatable {
     public static func == (lhs: CancellationError, rhs: CancellationError) -> Bool {
         true

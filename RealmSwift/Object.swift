@@ -401,7 +401,31 @@ extension Object: _RealmCollectionValueInsideOptional {
     public func observe<T: ObjectBase>(keyPaths: [PartialKeyPath<T>],
                                        on queue: DispatchQueue? = nil,
                                        _ block: @escaping (ObjectChange<T>) -> Void) -> NotificationToken {
-        return _observe(keyPaths: keyPaths.map(_name(for:)), on: queue, block)
+        _observe(keyPaths: keyPaths.map(_name(for:)), on: queue, block)
+    }
+
+    @available(macOS 10.15, tvOS 13.0, iOS 13.0, watchOS 6.0, *)
+    @_unsafeInheritExecutor
+    public func observe<A: Actor>(
+        keyPaths: [String]? = nil, on actor: A,
+        _ block: @Sendable @escaping (isolated A, ObjectChange<Self>) -> Void
+    ) async -> NotificationToken {
+        await with(self, on: actor) { actor, obj in
+            obj.observe(keyPaths: keyPaths, on: nil) { (change: ObjectChange<Self>) in
+                assumeOnActorExecutor(actor) { actor in
+                    block(actor, change)
+                }
+            }
+        } ?? NotificationToken()
+    }
+
+    @available(macOS 10.15, tvOS 13.0, iOS 13.0, watchOS 6.0, *)
+    @_unsafeInheritExecutor
+    public func observe<A: Actor, T: RealmSwiftObject>(
+        keyPaths: [PartialKeyPath<T>], on actor: A,
+        _ block: @Sendable @escaping (isolated A, ObjectChange<Self>) -> Void
+    ) async -> NotificationToken {
+        await observe(keyPaths: keyPaths.map(_name(for:)), on: actor, block)
     }
 
     // MARK: Dynamic list
