@@ -18,15 +18,14 @@
 			name = "Download BaaS";
 			productName = "Download BaaS";
 		};
-		E83EAC791BED3D880085CCD2 /* SwiftLint */ = {
+		E83EAC791BED3D880085CCD2 /* CI */ = {
 			isa = PBXAggregateTarget;
-			buildConfigurationList = E83EAC7C1BED3D880085CCD2 /* Build configuration list for PBXAggregateTarget "SwiftLint" */;
+			buildConfigurationList = E83EAC7C1BED3D880085CCD2 /* Build configuration list for PBXAggregateTarget "CI" */;
 			buildPhases = (
-				E83EAC7D1BED3D8F0085CCD2 /* Run SwiftLint */,
 			);
 			dependencies = (
 			);
-			name = SwiftLint;
+			name = CI;
 			productName = SwiftLint;
 		};
 /* End PBXAggregateTarget section */
@@ -2523,14 +2522,14 @@
 				5D660FD71BE98C7C0021E04F /* RealmSwift Tests */,
 				E8267FB11D90B79000E001C7 /* ObjectServerTests */,
 				E856D1DE195614A400FB2FCF /* iOS static tests */,
-				E83EAC791BED3D880085CCD2 /* SwiftLint */,
 				3F1A5E711992EB7400F45F4C /* TestHost */,
 				3F9D91802152D42F00474F09 /* TestHost static */,
-				49E57A16245C3F31004AF428 /* Download BaaS */,
 				53124AB725B71AF600771CE4 /* SwiftUITestHost */,
 				53124AD325B71AF700771CE4 /* SwiftUITests */,
 				AC8846722686573B00DF4A65 /* SwiftUISyncTestHost */,
 				AC88475926888C6300DF4A65 /* SwiftUISyncTests */,
+				49E57A16245C3F31004AF428 /* Download BaaS */,
+				E83EAC791BED3D880085CCD2 /* CI */,
 			);
 		};
 /* End PBXProject section */
@@ -2737,20 +2736,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "exec \"${SRCROOT}/scripts/generate-rlmversion.sh\"\n";
-		};
-		E83EAC7D1BED3D8F0085CCD2 /* Run SwiftLint */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Run SwiftLint";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "if which swiftlint >/dev/null; then\n  swiftlint\nelse\n  echo \"SwiftLint does not exist, download from https://github.com/realm/SwiftLint\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -3744,7 +3729,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		E83EAC7C1BED3D880085CCD2 /* Build configuration list for PBXAggregateTarget "SwiftLint" */ = {
+		E83EAC7C1BED3D880085CCD2 /* Build configuration list for PBXAggregateTarget "CI" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E83EAC7A1BED3D880085CCD2 /* Debug */,

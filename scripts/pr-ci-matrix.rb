@@ -51,29 +51,64 @@ targets = {
   'swiftui-server-osx' => latest_only,
 }
 
-output_file = """
-# Yaml Axis Plugin
-# https://wiki.jenkins-ci.org/display/JENKINS/Yaml+Axis+Plugin
+output_file = "#!/bin/sh"
+output_file << """
 # This is a generated file produced by scripts/pr-ci-matrix.rb.
 
+set -o pipefail
+
+# Set the -e flag to stop running the script in case a command returns
+# a non-zero exit code.
+set -e
+
+echo 'export GEM_HOME=$HOME/gems' >>~/.bash_profile
+echo 'export PATH=$HOME/gems/bin:$PATH' >>~/.bash_profile
+export GEM_HOME=$HOME/gems
+export PATH=\"$GEM_HOME/bin:$PATH\"
+
+: '
 xcode_version:#{XCODE_VERSIONS.map { |v| "\n - #{v}" }.join()}
 target:#{targets.map { |k, v| "\n - #{k}" }.join()}
 configuration:
  - N/A
+'
 
-exclude:
+# Dependencies
+brew install moreutils
+
+# CI Workflows
+cd ..
 """
-targets.each { |name, filter|
+
+targets.each_with_index { |(name, filter), index|
   XCODE_VERSIONS.each { |version|
-    if not filter.call(version)
+    if filter.call(version)
       output_file << """
-  - xcode_version: #{version}
-    target: #{name}
+: '
+- xcode_version: #{version}
+- target: #{name}
+'
 """
+      if index == 0
+          output_file << "if [ \"$CI_WORKFLOW\" = \"#{name}_#{version}\" ]; then\n"
+      else
+          output_file << "elif [ \"$CI_WORKFLOW\" = \"#{name}_#{version}\" ]; then\n"
+      end
+      output_file << "     export target=\"#{name}\"\n"
+      output_file << "     sh -x build.sh ci-pr | ts\n"
+
+      if index == targets.size - 1
+          output_file << "elif [ \"$CI_WORKFLOW\" = \"Realm-Latest\" ] || [ \"$CI_WORKFLOW\" = \"RealmSwift-Latest\" ]; then\n"
+          output_file << "     echo \"CI workflows for testing latest XCode releases\"\n"
+          output_file << "else\n"
+          output_file << "     set +e\n"
+          output_file << "     exit 1\n"
+          output_file << "fi\n"
+      end
     end
   }
 }
 
-File.open('.jenkins.yml', "w") do |file|
+File.open('ci_scripts/ci_post_clone.sh', "w") do |file|
   file.puts output_file
 end

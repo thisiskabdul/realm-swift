@@ -18,6 +18,7 @@ x.y.z Release notes (yyyy-MM-dd)
 
 ### Internal
 * Upgraded realm-core from ? to ?
+* Migrated our CI to Xcode Cloud.
 
 10.36.0 Release notes (2023-02-15)
 =============================================================

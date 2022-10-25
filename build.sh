@@ -103,9 +103,9 @@ xcode_version_major() {
 
 xcode() {
     mkdir -p build/DerivedData
-    CMD="xcodebuild -IDECustomDerivedDataLocation=build/DerivedData"
+    CMD="xcodebuild -derivedDataPath==build/DerivedData"
     echo "Building with command: $CMD $*"
-    xcodebuild -IDECustomDerivedDataLocation=build/DerivedData "$@"
+    xcodebuild -derivedDataPath==build/DerivedData "$@"
 }
 
 xc() {
@@ -113,10 +113,10 @@ xc() {
     : "${NSUnbufferedIO:=YES}"
     args=("SWIFT_VERSION=$REALM_SWIFT_VERSION" $REALM_EXTRA_BUILD_ARGUMENTS)
     if [[ "$XCMODE" == "xcodebuild" ]]; then
-        xcode "$@" "${args[@]}"
+        xcodebuild "$@" "${args[@]}"
     elif [[ "$XCMODE" == "xcpretty" ]]; then
         mkdir -p build
-        xcode "$@" "${args[@]}" | tee build/build.log | xcpretty -c "${XCPRETTY_PARAMS[@]}" || {
+        xcodebuild "$@" "${args[@]}" | tee build/build.log | xcpretty -c "${XCPRETTY_PARAMS[@]}" || {
             echo "The raw xcodebuild output is available in build/build.log"
             exit 1
         }
@@ -150,7 +150,7 @@ build_combined() {
     fi
 
     # Derive build paths
-    local build_products_path="build/DerivedData/Realm/Build/Products"
+    local build_products_path="$CI_DERIVED_DATA_PATH/build/Products"
     local product_name="$module_name.framework"
     local os_path="$build_products_path/$config-$os$scope_suffix/$product_name"
     local simulator_path="$build_products_path/$config-$simulator$scope_suffix/$product_name"
@@ -170,7 +170,7 @@ build_combined() {
 copy_realm_framework() {
     local platform="$1"
     rm -rf "build/$platform/swift-$REALM_XCODE_VERSION/Realm.xcframework"
-    cp -R "build/$platform/Realm.xcframework" "build/$platform/swift-$REALM_XCODE_VERSION"
+    cp -R "$CI_PRIMARY_REPOSITORY_PATH/build/$platform/Realm.xcframework" "build/$platform/swift-$REALM_XCODE_VERSION"
 }
 
 clean_retrieve() {
@@ -251,6 +251,7 @@ build_docs() {
         objc=""
     fi
 
+    echo ">>> RUN JAZZY"
     touch Realm/RLMPlatform.h # jazzy will fail if it can't find all public header files
     jazzy \
       "${objc}" \
@@ -299,6 +300,30 @@ REALM_XCODE_VERSION=${xcode_version:-$REALM_XCODE_VERSION}
 REALM_SWIFT_VERSION=${swift_version:-$REALM_SWIFT_VERSION}
 source "${source_root}/scripts/swift-version.sh"
 set_xcode_and_swift_versions
+
+######################################
+# CI Helpers
+######################################
+
+install_dependencies() {
+    echo ">>> Installing dependencies"
+    dependencies=""
+
+    if [ "$target" = "docs" ]; then
+        gem install jazzy -v 0.14.2
+    elif [ "$target" = "swiftlint" ]; then
+        dependencies=" ${dependencies}swiftlint "
+    elif [ "$target" = cocoapods* ] || [ "$target" = "ios-static" ]; then
+        dependencies=" ${dependencies}cocoapods "
+    fi
+
+    gem install xcpretty -v 0.3.0
+
+    echo ">>> Brew Dependencies$dependencies"
+    if [ ! "$dependencies" = "" ]; then
+        brew install ${dependencies}
+    fi
+}
 
 ######################################
 # Commands
@@ -392,7 +417,7 @@ case "$COMMAND" in
 
     "osx")
         xc -scheme Realm -configuration "$CONFIGURATION"
-        clean_retrieve "build/DerivedData/Realm/Build/Products/$CONFIGURATION/Realm.framework" "build/osx" "Realm.framework"
+        clean_retrieve "$CI_DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/Realm.framework" "build/osx" "Realm.framework"
         exit 0
         ;;
 
@@ -400,7 +425,7 @@ case "$COMMAND" in
         sh build.sh osx
         xc -scheme RealmSwift -configuration "$CONFIGURATION" build
         destination="build/osx/swift-$REALM_XCODE_VERSION"
-        clean_retrieve "build/DerivedData/Realm/Build/Products/$CONFIGURATION/RealmSwift.framework" "$destination" "RealmSwift.framework"
+        clean_retrieve "$CI_DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/RealmSwift.framework" "$destination" "RealmSwift.framework"
         clean_retrieve "build/osx/Realm.framework" "$destination" "Realm.framework"
         exit 0
         ;;
@@ -433,12 +458,12 @@ case "$COMMAND" in
         done
 
         # Assemble them into xcframeworks
-        rm -rf build/*.xcframework
-        find build/DerivedData/Realm/Build/Products -name 'Realm.framework' \
+        cd ..
+        find $CI_DERIVED_DATA/Build/Products -name 'Realm.framework' \
             | grep -v '\-static' \
             | sed 's/.*/-framework &/' \
             | xargs xcodebuild -create-xcframework -allow-internal-distribution -output build/Realm.xcframework
-        find build/DerivedData/Realm/Build/Products -name 'RealmSwift.framework' \
+        find $CI_DERIVED_DATA/Realm/Build/Products -name 'RealmSwift.framework' \
             | sed 's/.*/-framework &/' \
             | xargs xcodebuild -create-xcframework -allow-internal-distribution -output build/RealmSwift.xcframework
 
@@ -710,7 +735,7 @@ case "$COMMAND" in
 
     "verify-osx")
         REALM_EXTRA_BUILD_ARGUMENTS="$REALM_EXTRA_BUILD_ARGUMENTS -workspace examples/osx/objc/RealmExamples.xcworkspace" \
-            sh build.sh test-osx
+        sh build.sh test-osx
         sh build.sh examples-osx
 
         (
@@ -743,7 +768,7 @@ case "$COMMAND" in
 
     "verify-ios-static")
         REALM_EXTRA_BUILD_ARGUMENTS="$REALM_EXTRA_BUILD_ARGUMENTS -workspace examples/ios/objc/RealmExamples.xcworkspace" \
-            sh build.sh test-ios-static
+        sh build.sh test-ios-static
         sh build.sh examples-ios
         ;;
 
@@ -793,14 +818,14 @@ case "$COMMAND" in
 
     "verify-tvos")
         REALM_EXTRA_BUILD_ARGUMENTS="$REALM_EXTRA_BUILD_ARGUMENTS -workspace examples/tvos/objc/RealmExamples.xcworkspace" \
-            sh build.sh test-tvos
+        sh build.sh test-tvos
         sh build.sh examples-tvos
         exit 0
         ;;
 
     "verify-tvos-swift")
         REALM_EXTRA_BUILD_ARGUMENTS="$REALM_EXTRA_BUILD_ARGUMENTS -workspace examples/tvos/swift/RealmExamples.xcworkspace" \
-            sh build.sh test-tvos-swift
+        sh build.sh test-tvos-swift
         sh build.sh examples-tvos-swift
         exit 0
         ;;
@@ -980,6 +1005,8 @@ case "$COMMAND" in
     ######################################
 
     "ci-pr")
+        install_dependencies
+        
         mkdir -p build/reports
         export REALM_DISABLE_ANALYTICS=1
         export REALM_DISABLE_UPDATE_CHECKER=1
@@ -1008,9 +1035,6 @@ case "$COMMAND" in
 
             if [[ "$target" = *"server"* ]] || [[ "$target" = "swiftpm"* ]]; then
                 mkdir .baas
-                mv build/stitch .baas
-                source "$(brew --prefix nvm)/nvm.sh" --no-use
-                nvm install 16.5.0
                 sh build.sh setup-baas
             fi
 
@@ -1023,7 +1047,7 @@ case "$COMMAND" in
             if [ "$failed" = "1" ] && grep -E 'DTXProxyChannel|DTXChannel|out of date and needs to be rebuilt|operation never finished bootstrapping' build/build.log ; then
                 echo "Known Xcode error detected. Running job again."
                 if grep -E 'out of date and needs to be rebuilt' build/build.log; then
-                    rm -rf build/DerivedData
+                    rm -rf DerivedData
                 fi
                 failed=0
                 sh build.sh "verify-$target" | tee build/build.log | xcpretty -r junit -o build/reports/junit.xml || failed=1
