@@ -37,31 +37,35 @@ class Cell: UITableViewCell {
 class TableViewController: UITableViewController {
     let realm = try! Realm()
     let results = try! Realm().objects(DemoObject.self).sorted(byKeyPath: "date")
-    var notificationToken: NotificationToken?
 
+    var task: Task<Void, Error>!
     override func viewDidLoad() {
         super.viewDidLoad()
-
         setupUI()
 
-        // Set results notification block
-        self.notificationToken = results.observe { (changes: RealmCollectionChange) in
-            switch changes {
-            case .initial:
-                // Results are now populated and can be accessed without blocking the UI
-                self.tableView.reloadData()
-            case .update(_, let deletions, let insertions, let modifications):
-                // Query results have changed, so apply them to the TableView
-                self.tableView.beginUpdates()
-                self.tableView.insertRows(at: insertions.map { IndexPath(row: $0, section: 0) }, with: .automatic)
-                self.tableView.deleteRows(at: deletions.map { IndexPath(row: $0, section: 0) }, with: .automatic)
-                self.tableView.reloadRows(at: modifications.map { IndexPath(row: $0, section: 0) }, with: .automatic)
-                self.tableView.endUpdates()
-            case .error(let err):
-                // An error occurred while opening the Realm file on the background worker thread
-                fatalError("\(err)")
+        task = Task {
+            for try await changes in self.results.changesetPublisher.values {
+                switch changes {
+                case .initial:
+                    // Results are now populated and can be accessed without blocking the UI
+                    self.tableView.reloadData()
+                case .update(_, let deletions, let insertions, let modifications):
+                    // Query results have changed, so apply them to the TableView
+                    self.tableView.beginUpdates()
+                    self.tableView.insertRows(at: insertions.map { IndexPath(row: $0, section: 0) }, with: .automatic)
+                    self.tableView.deleteRows(at: deletions.map { IndexPath(row: $0, section: 0) }, with: .automatic)
+                    self.tableView.reloadRows(at: modifications.map { IndexPath(row: $0, section: 0) }, with: .automatic)
+                    self.tableView.endUpdates()
+                case .error(let err):
+                    // An error occurred while opening the Realm file on the background worker thread
+                    fatalError("\(err)")
+                }
             }
         }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        task.cancel()
     }
 
     // UI
@@ -103,6 +107,8 @@ class TableViewController: UITableViewController {
     // Actions
 
     @objc func backgroundAdd() {
+        task.cancel()
+        return
         // Import many items in a background thread
         DispatchQueue.global().async {
             // Get new realm and table since we are in a new thread
