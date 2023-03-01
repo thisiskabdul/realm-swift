@@ -27,8 +27,8 @@
 #import "RLMObservation.hpp"
 #import "RLMProperty_Private.h"
 #import "RLMQueryUtil.hpp"
-#import "RLMRealm_Private.hpp"
 #import "RLMRealmConfiguration_Private.hpp"
+#import "RLMScheduler.h"
 #import "RLMSchema_Private.h"
 #import "RLMSectionedResults_Private.hpp"
 #import "RLMThreadSafeReference_Private.hpp"
@@ -556,8 +556,9 @@ returnNilForEmpty:(BOOL)returnNilForEmpty {
 }
 #pragma clang diagnostic pop
 
-realm::Results& RLMGetBackingCollection(RLMResults *self) {
-    return self->_results;
+- (realm::NotificationToken)addNotificationCallback:(id)block
+keyPaths:(std::optional<std::vector<std::vector<std::pair<realm::TableKey, realm::ColKey>>>>&&)keyPaths {
+    return _results.add_notification_callback(RLMWrapCollectionChangeCallback(block, self, true), std::move(keyPaths));
 }
 
 - (BOOL)isAttached {

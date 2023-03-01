@@ -44,7 +44,7 @@ class RLMObservationInfo;
 }
 @end
 
-@interface RLMManagedArray () <RLMFastEnumerable>
+@interface RLMManagedArray () <RLMCollectionPrivate>
 - (RLMManagedArray *)initWithBackingCollection:(realm::List)list
                                     parentInfo:(RLMClassInfo *)parentInfo
                                       property:(RLMProperty *)property;
@@ -68,6 +68,6 @@ void RLMEnsureArrayObservationInfo(std::unique_ptr<RLMObservationInfo>& info,
 //
 // RLMResults private methods
 //
-@interface RLMResults () <RLMFastEnumerable>
+@interface RLMResults () <RLMCollectionPrivate>
 - (void)deleteObjectsFromRealm;
 @end
