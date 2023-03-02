@@ -18,7 +18,9 @@
 
 #import "RLMRealm_Private.hpp"
 
+#if DEBUG
 #import "RLMAnalytics.hpp"
+#endif
 #import "RLMAsyncTask_Private.h"
 #import "RLMArray_Private.hpp"
 #import "RLMDictionary_Private.hpp"
@@ -79,6 +81,7 @@ void RLMDisableSyncToDisk() {
 }
 
 static std::atomic<bool> s_set_skip_backup_attribute{true};
+static bool initialized;
 void RLMSetSkipBackupAttribute(bool value) {
     s_set_skip_backup_attribute = value;
 }
@@ -232,15 +235,17 @@ bool copySeedFile(RLMRealmConfiguration *configuration, NSError **error) {
     bool _sendingNotifications;
 }
 
-+ (void)initialize {
-    static bool initialized;
++ (void)runFirstCheckForConfiguration:(RLMRealmConfiguration *)configuration schema:(RLMSchema *)schema {
+#if DEBUG
     if (initialized) {
         return;
     }
     initialized = true;
 
+    // Run Analytics and Update Checker on the very first any Realm open.
     RLMCheckForUpdates();
-    RLMSendAnalytics();
+    RLMSendAnalytics(configuration, schema);
+#endif
 }
 
 - (instancetype)initPrivate {
@@ -465,6 +470,9 @@ bool copySeedFile(RLMRealmConfiguration *configuration, NSError **error) {
         }];
     }
 #endif
+
+    // Run Analytics and Update checker, this will be run only the first any realm open
+    [self runFirstCheckForConfiguration:configuration schema:realm.schema];
 
     return realm;
 }
