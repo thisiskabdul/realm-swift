@@ -112,6 +112,9 @@ let package = Package(
         .library(
             name: "RealmSwift",
             targets: ["Realm", "RealmSwift"]),
+        .library(
+            name: "RealmAnalytics",
+            targets: ["RealmSwift"]),
     ],
     dependencies: [
         .package(name: "RealmDatabase", url: "https://github.com/realm/realm-core.git", .exact(Version(coreVersionStr)!))
@@ -229,6 +232,11 @@ let package = Package(
                 "RealmSwift-Info.plist",
                 "Tests",
             ]
+        ),
+        .target(
+            name: "RealmAnalytics",
+            dependencies: ["RealmSwift"],
+            path: "RealmAnalytics"
         ),
         .target(
             name: "RealmTestSupport",
