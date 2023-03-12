@@ -120,22 +120,9 @@ open class SwiftSyncTestCase: RLMSyncTestCase {
     }
 
     open func logInUser(for credentials: Credentials, app: App? = nil) throws -> User {
-        var theUser: User!
-        let ex = expectation(description: "Should log in the user properly")
-
-        (app ?? self.app).login(credentials: credentials) { result in
-            switch result {
-            case .success(let user):
-                theUser = user
-                XCTAssertTrue(theUser.isLoggedIn)
-            case .failure(let error):
-                XCTFail("Should login user: \(error)")
-            }
-            ex.fulfill()
-        }
-
-        waitForExpectations(timeout: 60, handler: nil)
-        return theUser
+        let user = (app ?? self.app).login(credentials: credentials).await(self, timeout: 60.0)
+        XCTAssertTrue(user.isLoggedIn)
+        return user
     }
 
     public func waitForUploads(for realm: Realm) {

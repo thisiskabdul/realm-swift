@@ -169,14 +169,8 @@ extension Events.Scope {
     */
     @_disfavoredOverload
     public func commit() -> Future<Void, Error> {
-        return Future<Void, Error> { promise in
-            RLMEventCommitScope(self.context, self.id) { error in
-                if let error = error {
-                    promise(.failure(error))
-                } else {
-                    promise(.success(()))
-                }
-            }
+        promisify {
+            RLMEventCommitScope(self.context, self.id, $0)
         }
     }
 }
@@ -211,14 +205,8 @@ public extension Events {
     @_disfavoredOverload
     func recordEvent(activity: String, eventType: String? = nil, data: String? = nil)
             -> Future<Void, Error> {
-        return Future<Void, Error> { promise in
-            self.recordEvent(activity: activity, eventType: eventType, data: data) { error in
-                if let error = error {
-                    promise(.failure(error))
-                } else {
-                    promise(.success(()))
-                }
-            }
+        promisify {
+            recordEvent(activity: activity, eventType: eventType, data: data, completion: $0)
         }
     }
 }
