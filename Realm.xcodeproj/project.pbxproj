@@ -3425,6 +3425,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 5D659E761BE03E0D006515A0 /* Realm.xcconfig */;
 			buildSettings = {
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
 			};
 			name = Debug;
 		};
@@ -3432,6 +3433,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 5D659E761BE03E0D006515A0 /* Realm.xcconfig */;
 			buildSettings = {
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
 			};
 			name = Release;
 		};
@@ -3481,6 +3483,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 5D659E741BE03E0D006515A0 /* Realm iOS static.xcconfig */;
 			buildSettings = {
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
 				CLANG_ENABLE_MODULE_DEBUGGING = NO;
 			};
 			name = Debug;
@@ -3489,6 +3492,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 5D659E741BE03E0D006515A0 /* Realm iOS static.xcconfig */;
 			buildSettings = {
+				BUILD_LIBRARY_FOR_DISTRIBUTION = YES;
 				CLANG_ENABLE_MODULE_DEBUGGING = NO;
 			};
 			name = Release;
